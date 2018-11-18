@@ -32,6 +32,9 @@
 #include <wtf/RunLoop.h>
 #include <wtf/text/WTFString.h>
 
+#include "miso_log.h"
+
+
 namespace WebDriver {
 
 // https://w3c.github.io/webdriver/webdriver-spec.html#dfn-maximum-safe-integer
@@ -398,7 +401,14 @@ void WebDriverService::parseCapabilities(const JSON::Object& matchedCapabilities
     String unhandledPromptBehavior;
     if (matchedCapabilities.getString("unhandledPromptBehavior"_s, unhandledPromptBehavior))
         capabilities.unhandledPromptBehavior = deserializeUnhandledPromptBehavior(unhandledPromptBehavior);
+    
     platformParseCapabilities(matchedCapabilities, capabilities);
+    
+    //----by dcw@2018118, to process browser options in capabilities object
+    String browserBinary;
+    if (matchedCapabilities.getString("browserBinary"_s, browserBinary))
+        capabilities.browserBinary = browserBinary;
+    //----
 }
 
 bool WebDriverService::findSessionOrCompleteWithError(JSON::Object& parameters, Function<void (CommandResult&&)>& completionHandler)
@@ -419,6 +429,8 @@ bool WebDriverService::findSessionOrCompleteWithError(JSON::Object& parameters, 
 
 RefPtr<JSON::Object> WebDriverService::validatedCapabilities(const JSON::Object& capabilities) const
 {
+	
+	
     // §7.2 Processing Capabilities.
     // https://w3c.github.io/webdriver/webdriver-spec.html#dfn-validate-capabilities
     RefPtr<JSON::Object> result = JSON::Object::create();
@@ -457,8 +469,26 @@ RefPtr<JSON::Object> WebDriverService::validatedCapabilities(const JSON::Object&
             if (!platformValidateCapability(it->key, it->value))
                 return nullptr;
             result->setValue(it->key, RefPtr<JSON::Value>(it->value));
-        } else
-            return nullptr;
+        }
+        //----by dcw@20181118, to extend support arguments
+        else if (it->key == "browserBinary"){
+        	String browserBinary;
+        	if(!it->value->asString(browserBinary)) {
+        		return nullptr;
+        	}
+        	result->setString(it->key, browserBinary);
+        } 
+        
+        else {
+            //----by dcw@21081118, to tolerate unkown parameters, output warning instead of returing nullptr.
+        	//return nullptr;
+        	
+        	String val;
+        	it->value->asString(val);
+        	m_log_msg(LOG_WARNING, "in validatedCapabilities(): unknown key [%s] with value [%s].",
+        			it->key.utf8().data(), val.utf8().data());
+        	continue;
+        }
     }
     return result;
 }
@@ -523,13 +553,92 @@ RefPtr<JSON::Object> WebDriverService::matchCapabilities(const JSON::Object& mer
                 return nullptr;
         } else if (it->key == "proxy") {
             // FIXME: implement proxy support.
-        } else if (!platformMatchCapability(it->key, it->value))
+        } 
+        //----by dcw@20181118, to extend more arguments
+        else if (it->key == "browserBinary"){
+            String browserBinary;
+            it->value->asString(browserBinary);
+            m_log_msg(LOG_FINE, "in matchCapabilities(): detected browserBinary option [%s].",
+            		browserBinary.utf8().data());
+        }
+        //----
+        
+        else if (!platformMatchCapability(it->key, it->value))
             return nullptr;
+        
         matchedCapabilities->setValue(it->key, RefPtr<JSON::Value>(it->value));
     }
 
+    
+    //----
+	m_log_msg(LOG_FINE, "In matchCapabilities(), matched capabilities [%s].",
+			matchedCapabilities->toJSONString().utf8().data()
+			);
+	//----
+	
     return matchedCapabilities;
 }
+
+
+//----by dcw@20181118
+String bool_optional_value_to_string(const std::optional<bool> & val) {
+	if (val.has_value()) {
+		return val.value() ? "true" : "false";
+	} else {
+		return "<empty>";
+	}
+}
+
+String capabilities_to_string(const Capabilities & capa) {
+	String res;
+	
+	res = makeString(res, "browserName = ", capa.browserName.value_or(emptyString()), "\n");
+	res = makeString(res, "browserVersion = ", capa.browserVersion.value_or(emptyString()), "\n");
+	res = makeString(res, "platformName = ", capa.platformName.value_or(emptyString()), "\n");
+	//res = makeString(res, "acceptInsecureCerts = ", bool_optional_value_to_string(capa.acceptInsecureCerts), "\n");
+	//res = makeString(res, "setWindowRect = ", bool_optional_value_to_string(capa.setWindowRect), "\n");
+	//res = makeString(res, "timeouts = ", capa.timeouts.value_or(emptyString()), "\n");
+	//res = makeString(res, "pageLoadStrategy = ", capa.pageLoadStrategy.value_or(emptyString()), "\n");
+	//res = makeString(res, "unhandledPromptBehavior = ", capa.unhandledPromptBehavior.value_or(emptyString()), "\n");
+	
+#if PLATFORM(GTK) || PLATFORM(WPE)
+	res = makeString(res, "browserBinary = ", capa.browserBinary.value_or(emptyString()), "\n");
+	
+	String args;
+	if(capa.browserArguments.has_value()) {
+		Vector<String> browserArguments = capa.browserArguments.value();
+		unsigned nargs = browserArguments.size();
+		for(unsigned i=0; i<nargs; ++i) {
+			String & arg = browserArguments.at(i);
+			args = makeString(args, " ", arg);
+		}
+	}
+	
+	res = makeString(res, "browserArguments = ", args, "\n");
+	//res = makeString(res, "certificates = ", capa.certificates.value_or(emptyString()), "\n");
+#endif
+#if PLATFORM(GTK)
+	//res = makeString(res, "unhandledPromptBehavior = ", bool_optional_value_to_string(capa.unhandledPromptBehavior), "\n");
+#endif
+	
+	return res;
+}
+
+String capabilities_list_to_string(const Vector<Capabilities> & capabilitiesList) {
+	String res("\n");
+	
+	unsigned int capa_size = capabilitiesList.size();
+	for(unsigned int i=0; i < capa_size; ++i) {
+		const Capabilities & capa = capabilitiesList.at(i);
+		res = makeString(res, capabilities_to_string(capa), "\n");
+    //	it->value->asString(val);[
+    //	res = makeString(res, it->key, " = ", val, "\n");
+    }
+    
+    return res;
+}
+//----
+
 
 Vector<Capabilities> WebDriverService::processCapabilities(const JSON::Object& parameters, Function<void (CommandResult&&)>& completionHandler) const
 {
@@ -615,6 +724,12 @@ Vector<Capabilities> WebDriverService::processCapabilities(const JSON::Object& p
         // 6.1. Let merged capabilities be the result of trying to merge capabilities with required capabilities and first match capabilities as arguments.
         auto mergedCapabilities = mergeCapabilities(*requiredCapabilities, *validatedFirstMatchCapabilies);
 
+        //----by dcw@20181118
+    	m_log_msg(LOG_FINE, "In processCapabilities(), merged capabilities [%s].",
+    			mergedCapabilities->toJSONString().utf8().data()
+    			);
+        //----
+        
         // 6.2. Let matched capabilities be the result of trying to match capabilities with merged capabilities as an argument.
         if (auto matchedCapabilities = matchCapabilities(*mergedCapabilities)) {
             // 6.3. If matched capabilities is not null return matched capabilities.
@@ -624,6 +739,7 @@ Vector<Capabilities> WebDriverService::processCapabilities(const JSON::Object& p
         }
     }
 
+    
     if (matchedCapabilitiesList.isEmpty()) {
         completionHandler(CommandResult::fail(CommandResult::ErrorCode::SessionNotCreated, String("Failed to match capabilities")));
         return { };
@@ -634,6 +750,12 @@ Vector<Capabilities> WebDriverService::processCapabilities(const JSON::Object& p
 
 void WebDriverService::newSession(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
 {
+	//----by dcw@20181118
+	m_log_msg(LOG_FINE, "In newSession(), received parameters [%s].",
+			parameters->toJSONString().utf8().data()
+			);
+	//----
+	
     // §8.1 New Session.
     // https://www.w3.org/TR/webdriver/#new-session
     if (m_session) {
@@ -647,6 +769,14 @@ void WebDriverService::newSession(RefPtr<JSON::Object>&& parameters, Function<vo
 
     // Reverse the vector to always take last item.
     matchedCapabilitiesList.reverse();
+    
+	//----by dcw@20181118
+	m_log_msg(LOG_FINE, "In newSession(), matched capabilities length [%d], contents [%s].",
+			matchedCapabilitiesList.size(),
+			capabilities_list_to_string(matchedCapabilitiesList).utf8().data()
+			);
+	//----
+	
     connectToBrowser(WTFMove(matchedCapabilitiesList), WTFMove(completionHandler));
 }
 

@@ -4,6 +4,7 @@ set(WebDriver_INCLUDE_DIRECTORIES
     "${WEBDRIVER_DIR}"
     "${DERIVED_SOURCES_WEBDRIVER_DIR}"
     "${FORWARDING_HEADERS_DIR}"
+    "${WEBDRIVER_DIR}/uvc_inc"
 )
 
 set(WebDriver_SOURCES
@@ -13,7 +14,12 @@ set(WebDriver_SOURCES
     SessionHost.cpp
     WebDriverMain.cpp
     WebDriverService.cpp
-    UvoicInc.cpp
+    uvc_inc/UvoicInc.cpp
+    uvc_inc/spinlock.c
+    uvc_inc/timestamp.c
+    uvc_inc/common.c
+    uvc_inc/miso_log.c
+    
 )
 
 set(WebDriver_LIBRARIES
